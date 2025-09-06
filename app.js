@@ -19,6 +19,7 @@ let frames = [];
 let currentFrame = 0;
 let drawing = false, lastX = 0, lastY = 0;
 const aiBtn = document.getElementById('aiGenerate');
+const aiRegenBtn = document.getElementById('aiRegenerateFrame');
 
 btn.addEventListener('click', async () => {
   if (!frames.length) { statusEl.textContent = 'Add at least one frame.'; return; }
@@ -260,6 +261,30 @@ aiBtn.addEventListener('click', async () => {
     console.error(e); statusEl.textContent = `AI generation failed: ${e.message || e}`;
   } finally {
     aiBtn.disabled = false; btn.disabled = false;
+  }
+});
+
+aiRegenBtn.addEventListener('click', async () => {
+  if (!frames.length) { statusEl.textContent = 'No frames to regenerate.'; return; }
+  const w = clampInt(parseInt(el('gifWidth').value,10),16,2048);
+  const h = clampInt(parseInt(el('gifHeight').value,10),16,2048);
+  const anim = el('aiAnimPrompt').value.trim();
+  const prompt = `Regenerate this in-between animation frame using the surrounding frames as guidance. Maintain subject identity, palette, and composition. Ensure smooth motion continuity${anim ? ` toward: "${anim}"` : ''}. Keep changes minimal.`;
+  const inputs = [];
+  if (frames[currentFrame-1]) inputs.push({ url: frames[currentFrame-1].toDataURL() });
+  inputs.push({ url: frames[currentFrame].toDataURL() });
+  if (frames[currentFrame+1]) inputs.push({ url: frames[currentFrame+1].toDataURL() });
+  aiRegenBtn.disabled = true; btn.disabled = true; statusEl.textContent = 'Regenerating current frame...';
+  try {
+    const res = await generateImageSafe(prompt, { width: w, height: h, image_inputs: inputs }, 'Regenerating frame');
+    const img = await loadImage(res.url);
+    const ctx = frames[currentFrame].getContext('2d');
+    ctx.clearRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+    renderCurrentFrame(); statusEl.textContent = 'Frame regenerated.';
+  } catch(e) {
+    console.error(e); statusEl.textContent = `Regeneration failed: ${e.message || e}`;
+  } finally {
+    aiRegenBtn.disabled = false; btn.disabled = false;
   }
 });
 
