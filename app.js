@@ -86,6 +86,41 @@ function waitFor(fn, interval = 50, timeout = 5000) {
   });
 }
 
+// simple sleep utility
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+// rate limit gate + exponential backoff retry
+let lastAIRequestTime = 0;
+async function rateLimitedCall(fn){
+  const minGap = 1200; // ms between AI calls
+  const now = Date.now();
+  const wait = Math.max(0, lastAIRequestTime + minGap - now);
+  if (wait > 0) await sleep(wait);
+  lastAIRequestTime = Date.now();
+  return fn();
+}
+
+// retry wrapper specifically for 429/rate-limit responses
+async function withRetry(doCall, label){
+  let delay = 1500; // start backoff
+  for (let attempt = 1; attempt <= 5; attempt++){
+    try { return await doCall(); }
+    catch(e){
+      const msg = (e && e.message) || '';
+      if (!(e?.status === 429 || /rate|limit|too many|429/i.test(msg))) throw e;
+      const jitter = Math.random() * 300;
+      statusEl.textContent = `${label} — rate limited. Retrying in ${((delay+jitter)/1000).toFixed(1)}s (attempt ${attempt}/5)`;
+      await sleep(delay + jitter);
+      delay = Math.min(delay * 1.8, 10000);
+    }
+  }
+  throw new Error('Exceeded retry attempts');
+}
+
+async function generateImageSafe(prompt, opts, label){
+  return withRetry(() => rateLimitedCall(() => websim.imageGen({ prompt, ...opts })), label);
+}
+
 function initFrames(w = 256, h = 256) {
   frames = [makeBlankCanvas(w, h)];
   currentFrame = 0;
@@ -203,7 +238,8 @@ aiBtn.addEventListener('click', async () => {
   const h = clampInt(parseInt(el('gifHeight').value,10),16,2048);
   aiBtn.disabled = true; btn.disabled = true; downloadLink.style.display='none'; statusEl.textContent = 'Generating base frame...';
   try {
-    const baseRes = await websim.imageGen({ prompt: base, width: w, height: h });
+    // base frame with rate-limit handling
+    const baseRes = await generateImageSafe(base, { width: w, height: h }, 'Generating base frame');
     const baseImg = await loadImage(baseRes.url);
     const first = makeBlankCanvas(w,h); first.getContext('2d').drawImage(baseImg,0,0,w,h);
     frames = [first]; currentFrame = 0; renderCurrentFrame(); updateFrameInfo();
@@ -212,7 +248,8 @@ aiBtn.addEventListener('click', async () => {
       statusEl.textContent = `Generating frame ${i+1}/${total}...`;
       const remaining = total - i;
       const stepPrompt = `Create the next animation frame from the previous image with a subtle, smooth change toward: "${anim}". Preserve subject identity, palette, and composition; keep differences minimal. ${remaining} frame(s) remain.`;
-      const res = await websim.imageGen({ prompt: stepPrompt, width: w, height: h, image_inputs: [{ url: prev.toDataURL() }] });
+      // step frames with rate-limit handling
+      const res = await generateImageSafe(stepPrompt, { width: w, height: h, image_inputs: [{ url: prev.toDataURL() }] }, `Frame ${i+1}/${total}`);
       const img = await loadImage(res.url);
       const c = makeBlankCanvas(w,h); c.getContext('2d').drawImage(img,0,0,w,h);
       frames.push(c); prev = c; updateFrameInfo();
